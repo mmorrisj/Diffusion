@@ -91,19 +91,53 @@ print(f'\n✅ Drive mounted — HF cache at {os.environ["HF_HOME"]}')
 """)
 
 # --------------------------------------------------------------------------- #
-md("## Step 3 — Install F5-TTS + tools (~2 min)")
+md(r"""
+## Step 3 — Install F5-TTS, Qwen3-TTS, Dia + tools (~3 min)
+
+Everything is installed here, **before any model is imported**, because all three engines must
+share one `transformers` version: `qwen-tts` pins **4.57.3**, and Colab ships 5.x, whose
+`check_model_inputs` decorator changed shape (→ `TypeError: check_model_inputs() missing 1
+required positional argument: 'func'` if 5.x is the one in memory). F5-TTS and Dia both work on
+4.57.3.
+
+If the cell ends with **"restart the runtime"**, do `Runtime → Restart session`, then run Steps 2–4
+again (installs are already on disk, so they're instant). This only happens on the first run.
+""")
 code(r"""
-import subprocess, importlib
-need = [p for p, m in [('f5-tts', 'f5_tts'), ('datasets', 'datasets'), ('soundfile', 'soundfile'), ('pandas', 'pandas')]
+import subprocess, importlib.util, importlib.metadata, sys
+
+TRANSFORMERS = '4.57.3'   # pinned by qwen-tts; F5-TTS and Dia are fine with it
+
+# 1) transformers first, so nothing below pulls in a different one
+if importlib.metadata.version('transformers') != TRANSFORMERS:
+    !pip install -q "transformers=={TRANSFORMERS}"
+    print(f'✅ transformers pinned to {TRANSFORMERS}')
+else:
+    print(f'✅ transformers {TRANSFORMERS} already installed')
+
+# 2) the engines + helpers (skip what's present)
+need = [p for p, m in [('f5-tts', 'f5_tts'), ('qwen-tts', 'qwen_tts'), ('datasets', 'datasets'),
+                       ('soundfile', 'soundfile'), ('pandas', 'pandas')]
         if importlib.util.find_spec(m) is None]
 if need:
-    !pip install -q {' '.join(need)}
+    !pip install -q {' '.join(need)} "transformers=={TRANSFORMERS}"
     print(f'✅ Installed: {", ".join(need)}')
 else:
-    print('✅ Already installed')
-if subprocess.run(['which', 'ffmpeg'], capture_output=True).returncode != 0:
-    !apt-get install -y -q ffmpeg
-print('✅ ffmpeg ready')
+    print('✅ Engines already installed')
+
+# 3) system tools: ffmpeg (audio/video utils), sox (qwen-tts resampling backend)
+for tool in ('ffmpeg', 'sox'):
+    if subprocess.run(['which', tool], capture_output=True).returncode != 0:
+        !apt-get install -y -q {tool} > /dev/null
+    print(f'✅ {tool} ready')
+
+# 4) if a different transformers was already imported into this kernel, a restart is required
+loaded = sys.modules.get('transformers')
+if loaded is not None and loaded.__version__ != TRANSFORMERS:
+    print(f'\n⚠️  transformers {loaded.__version__} is already loaded in this kernel — '
+          f'restart the runtime (Runtime → Restart session), then run Steps 2–4 again.')
+else:
+    print('\n✅ All installs complete')
 """)
 
 # --------------------------------------------------------------------------- #
@@ -478,12 +512,13 @@ Non-verbal sounds aren't a documented feature — keep Dia for `(gasps)`.
 ### J. Load Qwen3-TTS (once)
 """)
 code(r"""
-import os, importlib.util, torch
+import os, torch, transformers
 
-if importlib.util.find_spec('qwen_tts') is None:
-    !pip install -q -U qwen-tts
-    # Qwen3-TTS is incompatible with transformers 5.x
-    !pip install -q "transformers>=4.57,<5"
+# qwen-tts pins transformers 4.57.3; a different version in memory means Step 3 ran after
+# something imported transformers — restart the runtime and re-run Steps 2–4.
+if transformers.__version__ != '4.57.3':
+    raise SystemExit(f'transformers {transformers.__version__} is loaded but qwen-tts needs 4.57.3 — '
+                     'run Step 3, then Runtime → Restart session, then Steps 2–4 again.')
 from qwen_tts import Qwen3TTSModel
 
 QWEN_DIR = f'{DRIVE_BASE}/models/qwen-tts/Qwen'      # shared with the ComfyUI nodes
@@ -624,15 +659,15 @@ fits on the T4 next to F5), voice-cloned from the same reference clips as F5.
 ### G. Load Dia (once)
 """)
 code(r"""
-import torch, importlib.util, subprocess, sys
+import torch, transformers
 
-# Dia landed in transformers 4.53; make sure we're on a version that has it.
+# Dia landed in transformers 4.53 — the 4.57.3 pinned in Step 3 has it. Don't upgrade here:
+# a newer transformers would break qwen-tts in the same kernel.
 try:
-    from transformers import DiaForConditionalGeneration
+    from transformers import DiaForConditionalGeneration, AutoProcessor
 except ImportError:
-    !pip install -q -U "transformers>=4.53"
-    from transformers import DiaForConditionalGeneration
-from transformers import AutoProcessor
+    raise SystemExit(f'transformers {transformers.__version__} has no Dia classes — run Step 3 '
+                     '(pins 4.57.3), then Runtime → Restart session, then Steps 2–4 again.')
 
 DIA_ID = 'nari-labs/Dia-1.6B-0626'
 dtype  = torch.float16 if torch.cuda.is_available() else torch.float32
