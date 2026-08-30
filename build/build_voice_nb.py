@@ -521,19 +521,48 @@ if transformers.__version__ != '4.57.3':
                      'run Step 3, then Runtime → Restart session, then Steps 2–4 again.')
 from qwen_tts import Qwen3TTSModel
 
-QWEN_DIR = f'{DRIVE_BASE}/models/qwen-tts/Qwen'      # shared with the ComfyUI nodes
-os.makedirs(QWEN_DIR, exist_ok=True)
+import shutil, time
+QWEN_STORE = f'{DRIVE_BASE}/models/qwen-tts/Qwen'    # durable copy on Drive, shared with the ComfyUI nodes
+QWEN_LOCAL = '/content/models/qwen-tts/Qwen'         # what we actually load from (VM disk = fast)
+os.makedirs(QWEN_STORE, exist_ok=True); os.makedirs(QWEN_LOCAL, exist_ok=True)
 _qwen = {'name': None, 'model': None}
 
+# A checkpoint is only usable if BOTH weight files are fully present (a config.json alone means a
+# download was interrupted — huggingface leaves the big files as .incomplete under .cache).
+WEIGHTS = ('model.safetensors', 'speech_tokenizer/model.safetensors')
+def _complete(d):
+    return all(os.path.exists(f'{d}/{w}') and os.path.getsize(f'{d}/{w}') > 100 * 1024**2 for w in WEIGHTS)
+
+def _stage(name):
+    # Ensure a complete copy in QWEN_LOCAL: from the Drive store if it has one, else from HF (then save to the store).
+    local, store = f'{QWEN_LOCAL}/{name}', f'{QWEN_STORE}/{name}'
+    if _complete(local):
+        return local
+    t0 = time.time()
+    if _complete(store):
+        print(f'📥 copying {name} from Drive to local disk…')
+        shutil.copytree(store, local, dirs_exist_ok=True, ignore=shutil.ignore_patterns('.cache'))
+    else:
+        try:
+            import hf_transfer  # noqa: F401  (multi-threaded downloads)
+        except ImportError:
+            !pip install -q hf_transfer
+        os.environ['HF_HUB_ENABLE_HF_TRANSFER'] = '1'
+        from huggingface_hub import snapshot_download
+        print(f'⬇️  downloading {name} (~3.8 GB) to local disk…')
+        snapshot_download(repo_id=f'Qwen/{name}', local_dir=local)
+        if not _complete(local):
+            raise SystemExit(f'{name} still incomplete after download — re-run this cell (downloads resume).')
+        print(f'   ↗ saving a copy to Drive ({store}) for next session…')
+        shutil.copytree(local, store, dirs_exist_ok=True, ignore=shutil.ignore_patterns('.cache'))
+    print(f'✅ {name} ready in {time.time()-t0:.0f}s')
+    return local
+
 def qwen(variant):
-    # variant: 'VoiceDesign' | 'Base' (clone) | 'CustomVoice'. Downloads to Drive on first use, keeps one loaded.
+    # variant: 'VoiceDesign' | 'Base' (clone) | 'CustomVoice'. Keeps one model resident; swaps on change.
     name = f'Qwen3-TTS-12Hz-1.7B-{variant}'
     if _qwen['name'] != name:
-        from huggingface_hub import snapshot_download
-        local = f'{QWEN_DIR}/{name}'
-        if not os.path.exists(f'{local}/config.json'):
-            print(f'⬇️  downloading {name} to Drive (~3.5 GB, once)…')
-            snapshot_download(repo_id=f'Qwen/{name}', local_dir=local)
+        local = _stage(name)
         _qwen['model'] = None; torch.cuda.empty_cache()
         dtype = torch.bfloat16 if torch.cuda.is_available() else torch.float32
         _qwen['model'] = Qwen3TTSModel.from_pretrained(local, device_map='cuda:0' if torch.cuda.is_available() else 'cpu', dtype=dtype)

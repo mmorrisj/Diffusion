@@ -260,14 +260,19 @@ QWEN_MODELS = [
     'Qwen3-TTS-12Hz-1.7B-Base',
     'Qwen3-TTS-12Hz-1.7B-CustomVoice',
 ]
+def _complete(d):
+    # config.json alone means an interrupted download; require the actual weights
+    w = f'{d}/model.safetensors'
+    return os.path.exists(w) and os.path.getsize(w) > 100 * 1024**2
+
 for name in QWEN_MODELS:
     dest = f'{MODELS_DIR}/qwen-tts/Qwen/{name}'
-    if os.path.exists(f'{dest}/config.json') or os.path.exists(f'{dest}/model.safetensors'):
-        print(f'  ✅ Already present: {name}')
+    if _complete(dest):
+        print(f'  ✅ Present ({os.path.getsize(f"{dest}/model.safetensors")/1024**3:.1f}GB): {name}')
         continue
     print(f'  ⬇️  Downloading: {name}')
-    snapshot_download(repo_id=f'Qwen/{name}', local_dir=dest)
-    print(f'  ✅ Done: {name}')
+    snapshot_download(repo_id=f'Qwen/{name}', local_dir=dest)   # resumes partial files
+    print(f'  ✅ Done: {name}' if _complete(dest) else f'  ⚠️  {name} incomplete — re-run this cell')
 print('\n✅ Qwen3-TTS checkpoints ready')
 """)
 
