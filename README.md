@@ -16,7 +16,8 @@ with models cached in Google Drive. All notebooks share one Drive layout:
 
 | Notebook | Runtime | What it does |
 |---|---|---|
-| [`wan22_i2v_comfyui_colab.ipynb`](wan22_i2v_comfyui_colab.ipynb) | A100 | Wan 2.2 image-to-video (high/low-noise pair, lightning LoRAs) |
+| [`wan22_i2v_comfyui_colab.ipynb`](wan22_i2v_comfyui_colab.ipynb) | A100 | Wan 2.2 image-to-video (high/low-noise pair, lightning LoRAs). Configurable storage: Drive / GCS / custom / none, with per-session staging to local NVMe |
+| [`wan22_i2v_comfyui_colab_hf.ipynb`](wan22_i2v_comfyui_colab_hf.ipynb) | A100 | I2V variant: weights pulled from Hugging Face each session, only LoRAs kept in Drive |
 | [`wan22_s2v.ipynb`](wan22_s2v.ipynb) | A100 | Wan 2.2 **speech-to-video**: audio drives a talking video. Installs F5-TTS and Qwen3-TTS nodes so voices can be cloned/designed in-graph |
 | [`voice_explorer.ipynb`](voice_explorer.ipynb) | T4 | Voice work without ComfyUI: browse a labelled LibriTTS-R voice library, audition lines, clone (F5-TTS), design voices from prose / per-line emotion (Qwen3-TTS), non-verbal tags like `(gasps)` (Dia) |
 | [`ltx2_s2v.ipynb`](ltx2_s2v.ipynb) | A100-80GB / H100 | LTX-2 audio-driven I2V ("custom voice"): one-shot clips as long as the line, 720×1280 @ 24 fps |
@@ -40,5 +41,5 @@ python build/build_voice_nb.py voice_explorer.ipynb
 python build/build_ltx2_nb.py  ltx2_s2v.ipynb
 ```
 
-All ComfyUI notebooks use the same launch cell: `TUNNEL="colab"` (same-origin Colab proxy, no
+The S2V/LTX-2 notebooks use the I2V notebook's launch cell: `TUNNEL="colab"` (same-origin Colab proxy, no
 403 host/origin issues with ComfyUI ≥ 1.19), with `ngrok` and `cloudflare` as alternatives.
