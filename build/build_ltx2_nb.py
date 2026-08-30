@@ -89,26 +89,14 @@ DRIVE_BASE = '/content/drive/MyDrive/ComfyUI_LTX'      # LTX-2 models + this not
 WAN_BASE   = '/content/drive/MyDrive/ComfyUI_Wan'      # shared: voices, input_audio, qwen-tts, output
 MODELS_DIR = f'{DRIVE_BASE}/models'
 
-dirs = [
-    f'{MODELS_DIR}/diffusion_models',
-    f'{MODELS_DIR}/text_encoders',
-    f'{MODELS_DIR}/vae',
-    f'{MODELS_DIR}/latent_upscale_models',
-    f'{MODELS_DIR}/loras',
-    f'{DRIVE_BASE}/input_images',
-    f'{WAN_BASE}/output',
-    f'{WAN_BASE}/voices',
-    f'{WAN_BASE}/input_audio',
-    f'{WAN_BASE}/models/qwen-tts/Qwen',
-]
-for d in dirs:
-    if os.path.islink(d):
-        print(f'⚠️  Symlink exists (skipping): {d}')
-    elif os.path.isfile(d):
-        os.remove(d); os.makedirs(d, exist_ok=True); print(f'✅ Fixed: {d}')
-    else:
-        os.makedirs(d, exist_ok=True); print(f'✅ {d}')
-print(f'\n✅ Drive mounted — LTX models in {MODELS_DIR}')
+for d in [f'{MODELS_DIR}/diffusion_models', f'{MODELS_DIR}/text_encoders', f'{MODELS_DIR}/vae',
+          f'{MODELS_DIR}/latent_upscale_models', f'{MODELS_DIR}/loras',
+          f'{DRIVE_BASE}/input_images',
+          f'{WAN_BASE}/output', f'{WAN_BASE}/voices', f'{WAN_BASE}/input_audio',
+          f'{WAN_BASE}/models/qwen-tts/Qwen']:
+    os.makedirs(d, exist_ok=True)
+
+print(f'✅ Drive mounted: {DRIVE_BASE}  (shared voices/audio/output in {WAN_BASE})')
 """)
 
 # --------------------------------------------------------------------------- #
@@ -123,45 +111,39 @@ code(r"""
 import os, subprocess
 os.chdir('/content')
 
+# ComfyUI — clone fresh if missing/corrupt, else update
 if os.path.exists('/content/ComfyUI'):
-    ok = subprocess.run(['git', 'rev-parse', '--git-dir'], cwd='/content/ComfyUI', capture_output=True).returncode == 0
-    if not ok:
-        !rm -rf /content/ComfyUI
-        !git clone -q https://github.com/comfyanonymous/ComfyUI.git
-        print('✅ ComfyUI cloned fresh')
-    else:
+    ok = subprocess.run(['git', 'rev-parse', '--git-dir'], cwd='/content/ComfyUI',
+                        capture_output=True).returncode == 0
+    if ok:
         !cd /content/ComfyUI && git pull -q
         print('✅ ComfyUI updated')
+    else:
+        !rm -rf /content/ComfyUI && git clone -q https://github.com/comfyanonymous/ComfyUI.git
+        print('✅ ComfyUI re-cloned (was corrupt)')
 else:
     !git clone -q https://github.com/comfyanonymous/ComfyUI.git
     print('✅ ComfyUI cloned')
 
-req_flag = '/content/comfyui_reqs_installed'
-if not os.path.exists(req_flag):
+# Core requirements (flag avoids reinstalling every session)
+if not os.path.exists('/content/comfyui_reqs_installed'):
     !pip install -q -r /content/ComfyUI/requirements.txt
-    open(req_flag, 'w').close()
+    open('/content/comfyui_reqs_installed', 'w').close()
     print('✅ Requirements installed')
 else:
     print('✅ Requirements already installed')
 
-if subprocess.run(['which', 'ffmpeg'], capture_output=True).returncode != 0:
-    subprocess.run(['apt-get', 'install', '-y', '-q', 'ffmpeg'], check=True)
-print('✅ ffmpeg ready')
-
-CN = '/content/ComfyUI/custom_nodes'
-packs = [
-    ('ComfyUI-Manager',           'https://github.com/ltdrdata/ComfyUI-Manager.git',            False),
-    ('ComfyUI-VideoHelperSuite',  'https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite.git', True),
-    ('ComfyUI-KJNodes',           'https://github.com/kijai/ComfyUI-KJNodes.git',                True),
-    ('ComfyUI_essentials',        'https://github.com/cubiq/ComfyUI_essentials.git',             True),
-    ('comfy_mtb',                 'https://github.com/melMass/comfy_mtb.git',                    True),
-    ('ComfyUI-TD-Qwen3TTS',       'https://github.com/AICoderTudou/ComfyUI-TD-Qwen3TTS.git',    True),
-]
-for name, url, has_reqs in packs:
-    path = f'{CN}/{name}'
+# Custom nodes
+for name, repo in [('ComfyUI-Manager', 'https://github.com/ltdrdata/ComfyUI-Manager.git'),
+                   ('ComfyUI-VideoHelperSuite', 'https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite.git'),
+                   ('ComfyUI-KJNodes', 'https://github.com/kijai/ComfyUI-KJNodes.git'),
+                   ('ComfyUI_essentials', 'https://github.com/cubiq/ComfyUI_essentials.git'),
+                   ('comfy_mtb', 'https://github.com/melMass/comfy_mtb.git'),                       # Audio Duration / Whisper nodes
+                   ('ComfyUI-TD-Qwen3TTS', 'https://github.com/AICoderTudou/ComfyUI-TD-Qwen3TTS.git')]:  # in-graph voice clone
+    path = f'/content/ComfyUI/custom_nodes/{name}'
     if not os.path.exists(path):
-        !git clone -q {url} {path}
-        if has_reqs and os.path.exists(f'{path}/requirements.txt'):
+        !git clone -q {repo} {path}
+        if os.path.exists(f'{path}/requirements.txt'):
             !pip install -q -r {path}/requirements.txt
         print(f'✅ {name} installed')
     else:
@@ -170,31 +152,31 @@ for name, url, has_reqs in packs:
 
 # Qwen3-TTS is incompatible with transformers 5.x
 !pip install -q "transformers>=4.57,<5"
+
+# ffmpeg (for video utilities)
+if subprocess.run(['which', 'ffmpeg'], capture_output=True).returncode != 0:
+    !apt-get install -y -q ffmpeg
 print('\n✅ All installs complete')
 """)
 
 # --------------------------------------------------------------------------- #
-md("## Step 4 — Symlink Models from Drive → ComfyUI")
+md("## Step 4 — Link Drive model folders into ComfyUI")
 code(r"""
 import os
-COMFY = '/content/ComfyUI/models'
+COMFY_MODELS = '/content/ComfyUI/models'
 
-def link(src, dst):
+links = {f'{COMFY_MODELS}/{f}': f'{MODELS_DIR}/{f}'
+         for f in ['diffusion_models', 'text_encoders', 'vae', 'latent_upscale_models', 'loras']}
+links[f'{COMFY_MODELS}/Qwen3-TTS-Models'] = f'{WAN_BASE}/models/qwen-tts/Qwen'   # TD Qwen nodes look here; shared checkpoints
+links['/content/ComfyUI/output'] = f'{WAN_BASE}/output'                          # → output/video/ for the LastFrame watcher
+
+for dst, src in links.items():
     if os.path.exists(dst) and not os.path.islink(dst):
         !rm -rf {dst}
     if not os.path.islink(dst):
-        os.makedirs(os.path.dirname(dst), exist_ok=True)
         os.symlink(src, dst)
-
-for folder in ['diffusion_models', 'text_encoders', 'vae', 'latent_upscale_models', 'loras']:
-    link(f'{MODELS_DIR}/{folder}', f'{COMFY}/{folder}'); print(f'  ✅ {folder}')
-
-# Qwen checkpoints shared with the other notebooks (TD nodes look in models/Qwen3-TTS-Models/<name>)
-link(f'{WAN_BASE}/models/qwen-tts/Qwen', f'{COMFY}/Qwen3-TTS-Models'); print('  ✅ Qwen3-TTS-Models → ComfyUI_Wan/models/qwen-tts/Qwen')
-
-# Output → ComfyUI_Wan/output so videos land in output/video/ for the LastFrame watcher
-link(f'{WAN_BASE}/output', '/content/ComfyUI/output'); print('  ✅ output → ComfyUI_Wan/output')
-print('\n✅ All folders linked to Drive')
+    print(f'  ✅ {os.path.basename(dst)} → Drive')
+print('\n✅ Folders linked')
 """)
 
 # --------------------------------------------------------------------------- #
@@ -239,13 +221,12 @@ models = [
      f'{LT}/ltx-2-spatial-upscaler-x2-1.0.safetensors',
      f'{MODELS_DIR}/latent_upscale_models/ltx-2-spatial-upscaler-x2-1.0.safetensors'),
 ]
-print('Checking LTX-2 models...')
 for label, url, dest in models:
-    if os.path.exists(dest) and os.path.getsize(dest) > 1024**2:
-        print(f'  ✅ Already exists ({os.path.getsize(dest)/1024**3:.1f}GB): {label}')
+    if os.path.exists(dest) and os.path.getsize(dest) > 1024:
+        print(f'  ✅ Present ({os.path.getsize(dest)/1024**3:.1f}GB): {label}')
     else:
         print(f'  ⬇️  Downloading: {label}')
-        !wget -q --show-progress -c -O "{dest}" "{url}"
+        !wget -q --show-progress -O "{dest}" "{url}"
         print(f'  ✅ Done ({os.path.getsize(dest)/1024**3:.1f}GB): {label}')
 
 # Qwen3-TTS (shared with the other notebooks)
@@ -365,6 +346,8 @@ What matters is one big card: Pro+ offers **A100-80GB**, **H100 (80GB)** and the
 availability varies by session. A100-40GB is the floor for this notebook.
 
 ### Troubleshooting
+- **Cloudflare "authentication" / 403** → use `TUNNEL = "colab"` in Step 6 (no auth, no external service). The Cloudflare path also wipes stale `~/.cloudflared` creds, which are the usual cause.
+- **Cell stops immediately** → Step 6 prints the ComfyUI log tail on failure; read it for the real error.
 - **OOM on a 40GB card** → in the *I2V* group set `WIDTH`/`HEIGHT` to 512×896 (the second pass still upscales 2×), keep lines ≤ 10 s, and/or relaunch Step 6 with `EXTRA_ARGS = ['--lowvram']`.
 - **`LatentUpscaleModelLoader` dropdown empty** → file must be in `models/latent_upscale_models/` (Step 4 links it); click *Refresh* in ComfyUI.
 - **Missing LTX nodes (`LTXVImgToVideoInplace`, `LTXVEmptyLatentAudio`…)** → ComfyUI too old; re-run Step 3.

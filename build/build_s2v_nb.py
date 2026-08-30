@@ -65,15 +65,17 @@ tuned for talking, singing and gesturing. Keep using your I2V graph for anything
 md("## Step 1 — Verify GPU")
 code(r"""
 import subprocess
-result = subprocess.run(['nvidia-smi', '--query-gpu=name,memory.total', '--format=csv,noheader'], capture_output=True, text=True)
-gpu = result.stdout.strip()
+gpu = subprocess.run(['nvidia-smi', '--query-gpu=name,memory.total', '--format=csv,noheader'],
+                     capture_output=True, text=True).stdout.strip()
 print(f'GPU: {gpu}')
 if 'A100' in gpu:
     print('✅ A100 confirmed — fp8 S2V + 2–3 extension chunks is comfortable')
 elif 'L4' in gpu:
-    print('⚠️  L4 (24GB) — S2V fp8 is tight; keep to 1 chunk (77 frames) and 480p')
+    print('⚠️  L4 — S2V fp8 is tight; keep to 1 chunk (77 frames) and 480p')
+elif 'T4' in gpu:
+    print('⚠️  T4 (16 GB) is too small for 14B fp8. Switch to A100: Runtime → Change runtime type → A100 GPU')
 else:
-    print('⚠️  Switch to A100: Runtime > Change runtime type > A100 GPU')
+    print('⚠️  Recommended: A100. Runtime → Change runtime type → A100 GPU')
 """)
 
 # --------------------------------------------------------------------------- #
@@ -93,34 +95,17 @@ drive.mount('/content/drive')
 DRIVE_BASE = '/content/drive/MyDrive/ComfyUI_Wan'
 MODELS_DIR = f'{DRIVE_BASE}/models'
 
-dirs = [
-    f'{MODELS_DIR}/diffusion_models',
-    f'{MODELS_DIR}/text_encoders',
-    f'{MODELS_DIR}/vae',
-    f'{MODELS_DIR}/clip_vision',
-    f'{MODELS_DIR}/loras',
-    f'{MODELS_DIR}/audio_encoders',   # NEW — wav2vec2 lives here
-    f'{MODELS_DIR}/checkpoints',      # F5-TTS downloads its models under checkpoints/F5-TTS
-    f'{MODELS_DIR}/qwen-tts',         # NEW — Qwen3-TTS checkpoints (voice design / clone / presets)
-    f'{DRIVE_BASE}/output',
-    f'{DRIVE_BASE}/input_images',
-    f'{DRIVE_BASE}/voices',           # NEW — reference voice clips (.wav + matching .txt transcript)
-    f'{DRIVE_BASE}/input_audio',      # NEW — generated speech / cleaned vocals to drive S2V
-]
+for d in [f'{MODELS_DIR}/diffusion_models', f'{MODELS_DIR}/text_encoders',
+          f'{MODELS_DIR}/vae', f'{MODELS_DIR}/clip_vision', f'{MODELS_DIR}/loras',
+          f'{MODELS_DIR}/audio_encoders',      # wav2vec2 (S2V audio encoder)
+          f'{MODELS_DIR}/checkpoints',         # F5-TTS caches its models under checkpoints/F5-TTS
+          f'{MODELS_DIR}/qwen-tts',            # Qwen3-TTS checkpoints
+          f'{DRIVE_BASE}/output', f'{DRIVE_BASE}/input_images',
+          f'{DRIVE_BASE}/voices',              # reference voice clips (.wav + matching .txt transcript)
+          f'{DRIVE_BASE}/input_audio']:        # generated speech / cleaned vocals that drive S2V
+    os.makedirs(d, exist_ok=True)
 
-for d in dirs:
-    if os.path.islink(d):
-        print(f'⚠️  Symlink exists (skipping): {d}')
-    elif os.path.isfile(d):
-        print(f'⚠️  File exists where folder expected: {d}')
-        os.remove(d)
-        os.makedirs(d, exist_ok=True)
-        print(f'✅ Fixed: {d}')
-    else:
-        os.makedirs(d, exist_ok=True)
-        print(f'✅ {d}')
-
-print(f'\n✅ Drive mounted: {DRIVE_BASE}')
+print(f'✅ Drive mounted: {DRIVE_BASE}')
 """)
 
 # --------------------------------------------------------------------------- #
@@ -135,112 +120,77 @@ code(r"""
 import os, subprocess
 os.chdir('/content')
 
-# --- ComfyUI core (only remove if broken) ---
+# ComfyUI — clone fresh if missing/corrupt, else update
 if os.path.exists('/content/ComfyUI'):
-    result = subprocess.run(['git', 'rev-parse', '--git-dir'], cwd='/content/ComfyUI', capture_output=True)
-    if result.returncode != 0:
-        print('⚠️  ComfyUI folder corrupt — removing')
-        !rm -rf /content/ComfyUI
-        !git clone -q https://github.com/comfyanonymous/ComfyUI.git
-        print('✅ ComfyUI cloned fresh')
-    else:
+    ok = subprocess.run(['git', 'rev-parse', '--git-dir'], cwd='/content/ComfyUI',
+                        capture_output=True).returncode == 0
+    if ok:
         !cd /content/ComfyUI && git pull -q
         print('✅ ComfyUI updated')
+    else:
+        !rm -rf /content/ComfyUI && git clone -q https://github.com/comfyanonymous/ComfyUI.git
+        print('✅ ComfyUI re-cloned (was corrupt)')
 else:
     !git clone -q https://github.com/comfyanonymous/ComfyUI.git
     print('✅ ComfyUI cloned')
 
-req_flag = '/content/comfyui_reqs_installed'
-if not os.path.exists(req_flag):
+# Core requirements (flag avoids reinstalling every session)
+if not os.path.exists('/content/comfyui_reqs_installed'):
     !pip install -q -r /content/ComfyUI/requirements.txt
-    open(req_flag, 'w').close()
+    open('/content/comfyui_reqs_installed', 'w').close()
     print('✅ Requirements installed')
 else:
     print('✅ Requirements already installed')
 
-# --- ComfyUI Manager ---
-mgr = '/content/ComfyUI/custom_nodes/ComfyUI-Manager'
-if not os.path.exists(mgr):
-    !git clone -q https://github.com/ltdrdata/ComfyUI-Manager.git {mgr}
-    print('✅ ComfyUI Manager installed')
-else:
-    !cd {mgr} && git pull -q
-    print('✅ ComfyUI Manager ready')
+# Custom nodes
+for name, repo in [('ComfyUI-Manager', 'https://github.com/ltdrdata/ComfyUI-Manager.git'),
+                   ('ComfyUI-VideoHelperSuite', 'https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite.git'),
+                   ('ComfyUI-F5-TTS', 'https://github.com/niknah/ComfyUI-F5-TTS.git'),        # zero-shot voice cloning
+                   ('ComfyUI-Qwen-TTS', 'https://github.com/flybirdxx/ComfyUI-Qwen-TTS.git'),  # voice design / presets / clone / dialogue
+                   ('rgthree-comfy', 'https://github.com/rgthree/rgthree-comfy.git')]:       # group bypasser used by the Qwen workflow
+    path = f'/content/ComfyUI/custom_nodes/{name}'
+    if not os.path.exists(path):
+        !git clone -q --recursive {repo} {path}
+        if os.path.exists(f'{path}/requirements.txt'):
+            !pip install -q -r {path}/requirements.txt
+        print(f'✅ {name} installed')
+    else:
+        !cd {path} && git pull -q
+        print(f'✅ {name} ready')
 
-# --- ffmpeg ---
-if subprocess.run(['which', 'ffmpeg'], capture_output=True).returncode != 0:
-    subprocess.run(['apt-get', 'install', '-y', '-q', 'ffmpeg'], check=True)
-    print('✅ ffmpeg installed')
-else:
-    print('✅ ffmpeg already present')
+# F5-TTS ships its engine as a git submodule; clone it manually if it came in empty
+f5 = '/content/ComfyUI/custom_nodes/ComfyUI-F5-TTS/F5-TTS'
+if os.path.isdir(f5) and not os.listdir(f5):
+    !rm -rf {f5} && git clone -q https://github.com/SWivid/F5-TTS.git {f5}
+    print('✅ F5-TTS engine cloned')
 
-# --- VideoHelperSuite (video + audio muxing) ---
-vhs = '/content/ComfyUI/custom_nodes/ComfyUI-VideoHelperSuite'
-if not os.path.exists(vhs):
-    !git clone -q https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite.git {vhs}
-    !pip install -q -r {vhs}/requirements.txt
-    print('✅ VideoHelperSuite installed')
-else:
-    print('✅ VideoHelperSuite ready')
-
-# --- F5-TTS voice cloning node (NEW) ---
-f5 = '/content/ComfyUI/custom_nodes/ComfyUI-F5-TTS'
-if not os.path.exists(f5):
-    !git clone -q --recursive https://github.com/niknah/ComfyUI-F5-TTS.git {f5}
-    # The F5-TTS engine is a git submodule; fall back to a manual clone if it came in empty.
-    if not os.listdir(f'{f5}/F5-TTS'):
-        !rm -rf {f5}/F5-TTS && git clone -q https://github.com/SWivid/F5-TTS.git {f5}/F5-TTS
-    !pip install -q -r {f5}/requirements.txt
-    print('✅ ComfyUI-F5-TTS installed (models download on first use)')
-else:
-    print('✅ ComfyUI-F5-TTS ready')
-
-# --- Qwen3-TTS nodes: voice design from a text description, presets, cloning, multi-role dialogue (NEW) ---
-qtts = '/content/ComfyUI/custom_nodes/ComfyUI-Qwen-TTS'
-if not os.path.exists(qtts):
-    !git clone -q https://github.com/flybirdxx/ComfyUI-Qwen-TTS.git {qtts}
-    !pip install -q -r {qtts}/requirements.txt
-    print('✅ ComfyUI-Qwen-TTS installed')
-else:
-    !cd {qtts} && git pull -q
-    print('✅ ComfyUI-Qwen-TTS ready')
-# Qwen3-TTS breaks on transformers 5.x — pin the version its README requires.
+# Qwen3-TTS is incompatible with transformers 5.x — pin the version its README requires
 !pip install -q "transformers==4.57.3"
 
-# --- rgthree (the Qwen workflow uses its group bypasser) ---
-rg = '/content/ComfyUI/custom_nodes/rgthree-comfy'
-if not os.path.exists(rg):
-    !git clone -q https://github.com/rgthree/rgthree-comfy.git {rg}
-    print('✅ rgthree-comfy installed')
-else:
-    print('✅ rgthree-comfy ready')
-
+# ffmpeg (for video utilities)
+if subprocess.run(['which', 'ffmpeg'], capture_output=True).returncode != 0:
+    !apt-get install -y -q ffmpeg
 print('\n✅ All installs complete')
 """)
 
 # --------------------------------------------------------------------------- #
-md("## Step 4 — Symlink Models from Drive → ComfyUI")
+md("## Step 4 — Link Drive model folders into ComfyUI")
 code(r"""
 import os
-COMFY = '/content/ComfyUI/models'
+COMFY_MODELS = '/content/ComfyUI/models'
 
-for folder in ['diffusion_models', 'text_encoders', 'vae', 'clip_vision', 'loras', 'audio_encoders', 'checkpoints', 'qwen-tts']:
-    src = f'{MODELS_DIR}/{folder}'
-    dst = f'{COMFY}/{folder}'
+links = {f'{COMFY_MODELS}/{f}': f'{MODELS_DIR}/{f}'
+         for f in ['diffusion_models', 'text_encoders', 'vae', 'clip_vision', 'loras',
+                   'audio_encoders', 'checkpoints', 'qwen-tts']}
+links['/content/ComfyUI/output'] = f'{DRIVE_BASE}/output'
+
+for dst, src in links.items():
     if os.path.exists(dst) and not os.path.islink(dst):
         !rm -rf {dst}
     if not os.path.islink(dst):
         os.symlink(src, dst)
-    print(f'  ✅ {folder}')
-
-out_dst = '/content/ComfyUI/output'
-out_src = f'{DRIVE_BASE}/output'
-if os.path.exists(out_dst) and not os.path.islink(out_dst):
-    !rm -rf {out_dst}
-if not os.path.islink(out_dst):
-    os.symlink(out_src, out_dst)
-print('  ✅ output')
-print('\n✅ All folders linked to Drive')
+    print(f'  ✅ {os.path.basename(dst)} → Drive')
+print('\n✅ Folders linked')
 """)
 
 # --------------------------------------------------------------------------- #
@@ -277,17 +227,13 @@ models = [
      f'{MODELS_DIR}/vae/wan_2.1_vae.safetensors'),
 ]
 
-print('Checking models...')
 for label, url, dest in models:
-    if os.path.exists(dest) and os.path.getsize(dest) > 1024**2:
-        gb = os.path.getsize(dest) / 1024**3
-        print(f'  ✅ Already exists ({gb:.1f}GB): {label}')
+    if os.path.exists(dest) and os.path.getsize(dest) > 1024:
+        print(f'  ✅ Present ({os.path.getsize(dest)/1024**3:.1f}GB): {label}')
     else:
         print(f'  ⬇️  Downloading: {label}')
-        !wget -q --show-progress -c -O "{dest}" "{url}"
-        gb = os.path.getsize(dest) / 1024**3
-        print(f'  ✅ Done ({gb:.1f}GB): {label}')
-
+        !wget -q --show-progress -O "{dest}" "{url}"
+        print(f'  ✅ Done ({os.path.getsize(dest)/1024**3:.1f}GB): {label}')
 print('\n✅ All models ready')
 """)
 
@@ -824,7 +770,9 @@ the other template.
 - Other zero-shot options with ComfyUI nodes if F5 doesn't suit the voice: Qwen3-TTS (10 languages), Chatterbox, OmniVoice.
 
 ### Troubleshooting
-- **`WanSoundImageToVideo` / `AudioEncoderLoader` missing** → ComfyUI too old; re-run Step 3 (it pulls latest)
+- **Cloudflare "authentication" / 403** → use `TUNNEL = "colab"` in Step 6 (no auth, no external service). The Cloudflare path also wipes stale `~/.cloudflared` creds, which are the usual cause.
+- **Cell stops immediately** → Step 6 prints the ComfyUI log tail on failure; read it for the real error.
+- **`WanSoundImageToVideo` / `AudioEncoderLoader` missing** → ComfyUI too old; re-run Step 3 (it pulls latest) and restart ComfyUI
 - **`wav2vec2` not in the dropdown** → check `models/audio_encoders/` symlink (Step 4) and the download (Step 5)
 - **Mouth doesn't match audio** → audio has music/noise under the voice; run Utility D
 - **Video shorter than audio** → not enough *Extend* nodes; run Utility C
