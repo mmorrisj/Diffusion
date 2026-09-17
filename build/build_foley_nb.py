@@ -271,22 +271,47 @@ cells.append(md(r"""
 The node pack ships a working example graph. Copying **its** workflow is deliberate: a hand-written ComfyUI JSON silently breaks whenever node inputs change, whereas this one is maintained alongside the nodes.
 """))
 cells.append(code(r"""
-import os, glob, shutil
+import os, glob, json, shutil
 
 SRC_DIR = f'{FOLEY_NODE}/example_workflows'
 DST_DIR = '/content/ComfyUI/user/default/workflows'
 os.makedirs(DST_DIR, exist_ok=True)
 
+# The shipped example is saved with "Use Everywhere" (cg-use-everywhere) metadata.
+# That pack is NOT installed here, and its leftover ue_links / links_added_by_ue keys
+# make the frontend throw during graph deserialisation: the workflow appears in the
+# sidebar, but clicking it opens a blank "Unsaved Workflow" tab with no nodes and no
+# error dialog. Stripping the keys fixes it; the graph itself is unaffected.
+def strip_use_everywhere(wf):
+    removed = 0
+    for k in ('ue_links', 'links_added_by_ue'):
+        if wf.get('extra', {}).pop(k, None) is not None:
+            removed += 1
+    for n in wf.get('nodes', []):
+        props = n.get('properties') or {}
+        for k in list(props):
+            if k.lower().startswith('ue') or 'use everywhere' in k.lower():
+                props.pop(k); removed += 1
+    return removed
+
 found = sorted(glob.glob(f'{SRC_DIR}/*.json'))
 if not found:
     print(f'⚠️  No example workflow found in {SRC_DIR}')
-    print('   Re-run Step 3, or build the chain by hand (4 nodes — see Step 8).')
+    print('   Re-run Step 3, or build the chain by hand (see Step 8).')
 else:
     for src in found:
         dst = os.path.join(DST_DIR, os.path.basename(src))
-        shutil.copyfile(src, dst)
-        print(f'  ✅ {os.path.basename(src)}')
-    print(f'\n✅ Installed to the Workflows (📂) sidebar in ComfyUI')
+        try:
+            wf = json.load(open(src, encoding='utf-8'))
+            n = strip_use_everywhere(wf)
+            json.dump(wf, open(dst, 'w', encoding='utf-8'), indent=1, ensure_ascii=False)
+            extra = f'  (stripped {n} Use-Everywhere keys)' if n else ''
+            print(f'  ✅ {os.path.basename(src)}{extra}')
+        except Exception as e:
+            shutil.copyfile(src, dst)   # not JSON we understand — copy it verbatim
+            print(f'  ⚠️  {os.path.basename(src)}: copied unmodified ({e})')
+    print('\n✅ Installed to the Workflows (📂) sidebar in ComfyUI')
+    print('   Already had ComfyUI open? Hard-refresh the tab (Ctrl+Shift+R).')
 """))
 
 # ----------------------------------------------------------------- step 7
