@@ -231,14 +231,19 @@ for label, url, dest in models:
 
 # Qwen3-TTS (shared with the other notebooks)
 from huggingface_hub import snapshot_download
+def _complete(d):
+    # config.json alone means an interrupted download; require the actual weights
+    w = f'{d}/model.safetensors'
+    return os.path.exists(w) and os.path.getsize(w) > 100 * 1024**2
+
 for name in ['Qwen3-TTS-Tokenizer-12Hz', 'Qwen3-TTS-12Hz-1.7B-Base']:
     dest = f'{WAN_BASE}/models/qwen-tts/Qwen/{name}'
-    if os.path.exists(f'{dest}/config.json'):
-        print(f'  ✅ Already present: {name}')
+    if _complete(dest):
+        print(f'  ✅ Present ({os.path.getsize(f"{dest}/model.safetensors")/1024**3:.1f}GB): {name}')
     else:
         print(f'  ⬇️  Downloading: {name}')
-        snapshot_download(repo_id=f'Qwen/{name}', local_dir=dest)
-        print(f'  ✅ Done: {name}')
+        snapshot_download(repo_id=f'Qwen/{name}', local_dir=dest)   # resumes partial files
+        print(f'  ✅ Done: {name}' if _complete(dest) else f'  ⚠️  {name} incomplete — re-run this cell')
 print('\n✅ All models ready')
 """)
 
